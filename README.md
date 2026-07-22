@@ -140,17 +140,15 @@ mesh geometry.
 
 Demo recordings from episode 269 (State, left EE trajectory):
 
-| Full mesh | Simplified (`--no-meshes`) |
-|---|---|
-| <video src="docs/videos/episode_269_state_full_mesh.mp4" controls width="360"></video> | <video src="docs/videos/episode_269_state_simplified.mp4" controls width="360"></video> |
+**Full mesh**
 
-<details>
-<summary>Direct video links</summary>
+![Full mesh Viser demo](docs/videos/episode_269_state_full_mesh.gif)
 
-- [Full mesh](docs/videos/episode_269_state_full_mesh.mp4)
-- [Simplified](docs/videos/episode_269_state_simplified.mp4)
+**Simplified (`--no-meshes`)**
 
-</details>
+![Simplified Viser demo](docs/videos/episode_269_state_simplified.gif)
+
+MP4 originals: [full mesh](docs/videos/episode_269_state_full_mesh.mp4) · [simplified](docs/videos/episode_269_state_simplified.mp4)
 
 The fixed GUI panel provides split, episode, frame and State/Action controls;
 30 Hz playback; camera presets; visibility switches; three synchronized camera
