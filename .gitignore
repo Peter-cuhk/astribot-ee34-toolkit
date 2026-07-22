@@ -5,6 +5,7 @@ __pycache__/
 .ruff_cache/
 reports/
 *.mp4
+!docs/videos/*.mp4
 dist/
 build/
 *.egg-info/

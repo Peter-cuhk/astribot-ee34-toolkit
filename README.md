@@ -138,6 +138,20 @@ the recorded robot using the complete blue S1 mesh while retaining the IK ghost
 as a lightweight orange/red skeleton, avoiding a second browser copy of all
 mesh geometry.
 
+Demo recordings from episode 269 (State, left EE trajectory):
+
+| Full mesh | Simplified (`--no-meshes`) |
+|---|---|
+| <video src="docs/videos/episode_269_state_full_mesh.mp4" controls width="360"></video> | <video src="docs/videos/episode_269_state_simplified.mp4" controls width="360"></video> |
+
+<details>
+<summary>Direct video links</summary>
+
+- [Full mesh](docs/videos/episode_269_state_full_mesh.mp4)
+- [Simplified](docs/videos/episode_269_state_simplified.mp4)
+
+</details>
+
 The fixed GUI panel provides split, episode, frame and State/Action controls;
 30 Hz playback; camera presets; visibility switches; three synchronized camera
 panels; and “Jump to worst frame” when a batch audit report is available.
