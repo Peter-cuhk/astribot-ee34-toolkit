@@ -1,0 +1,10 @@
+Astribot EE34 Toolkit
+
+This project was developed from an Astribot S1 data-conversion and kinematics
+audit workflow originally maintained alongside OpenPI. It is distributed as an
+independent toolkit and does not include OpenPI source code, Astribot SDK files,
+URDF files, meshes, or datasets.
+
+Astribot SDK and model assets are distributed separately under their respective
+license terms. Retain their copyright and license notices when redistributing
+those assets.
