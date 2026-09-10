@@ -177,6 +177,31 @@ publicly:
 ssh -L 8080:127.0.0.1:8080 your-server
 ```
 
+## Offline MP4 renderer
+
+The Viser view above has to be screen-recorded. For a shareable clip,
+`astribot-ee34-render-video` composites frames headlessly and writes the MP4
+directly. It inverts the Viser layout: the three recorded cameras take the large
+left block and the URDF skeleton takes the narrow right block, with the episode
+language prompt from `meta/tasks.jsonl` as the title.
+
+```bash
+uv run astribot-ee34-render-video \
+  --dataset-root "$HF_LEROBOT_HOME/astribot/ee34_pick_tomato_v1_val" \
+  --episode-id episode_269 \
+  --output docs/videos/episode_269_prompt_cameras_main.mp4
+```
+
+Joint angles come from the recording listed in `meta/ee34_conversion_episodes.jsonl`;
+pass `--hdf5` when that file has moved. `--prompt` overrides the title text,
+`--stream action` renders the command stream instead of the state stream, and
+`--elev/--azim/--zoom/--camera-fraction` tune the skeleton panel. The skeleton
+frames are the EE34 `torso`/`left`/`right` end effectors, labelled `head`,
+`left_wrist` and `right_wrist` so they read against the camera panel they belong
+to.
+
+Rendered clip: [episode 269, prompt-titled, camera-first](docs/videos/episode_269_prompt_cameras_main.mp4)
+
 ## Example disagreement
 
 ![Episode 502 frame 128 kinematics disagreement](docs/images/episode_502_frame_128_state_full.png)

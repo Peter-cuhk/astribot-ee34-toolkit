@@ -29,11 +29,15 @@ lerobot = [
     "torch>=2.2,<3",
 ]
 visualization = [
+    "imageio[ffmpeg]>=2.34",
+    "matplotlib>=3.8",
     "viser>=1.0.0",
     "yourdfpy>=0.0.60",
 ]
 all = [
+    "imageio[ffmpeg]>=2.34",
     "lerobot @ git+https://github.com/huggingface/lerobot.git@0cf864870cf29f4738d3ade893e6fd13fbd7cdb5",
+    "matplotlib>=3.8",
     "torch>=2.2,<3",
     "viser>=1.0.0",
     "yourdfpy>=0.0.60",
@@ -41,6 +45,7 @@ all = [
 
 [project.scripts]
 astribot-ee34-convert = "astribot_ee34.convert:main"
+astribot-ee34-render-video = "astribot_ee34.render_video:main"
 astribot-ee34-validate-contract = "astribot_ee34.validate_contract:main"
 astribot-ee34-validate-dataset = "astribot_ee34.validate_dataset:main"
 astribot-ee34-validate-kinematics = "astribot_ee34.validate_kinematics:main"
