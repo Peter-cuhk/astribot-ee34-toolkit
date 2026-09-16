@@ -202,6 +202,23 @@ to.
 
 Rendered clip: [episode 269, prompt-titled, camera-first](docs/videos/episode_269_prompt_cameras_main.mp4)
 
+### Raw rollouts
+
+Robot rollouts are uploaded as directories holding `robot_episode.hdf5` (joints
+plus the three cameras as concatenated JPEG blobs) and `recording.json`.
+`astribot-ee34-render-rollout` renders them with the same layout, without a
+LeRobot conversion, writing `<rollout dir name>.mp4` per input:
+
+```bash
+uv run astribot-ee34-render-rollout \
+  /path/to/rollouts/20260916/*/ \
+  --output-dir /path/to/videos
+```
+
+The title defaults to the `recording.json` task with underscores replaced by
+spaces; pass `--prompt` for the exact language instruction. Frame count follows
+the HDF5 (30 Hz), and every camera must have one image per joint frame.
+
 ## Example disagreement
 
 ![Episode 502 frame 128 kinematics disagreement](docs/images/episode_502_frame_128_state_full.png)

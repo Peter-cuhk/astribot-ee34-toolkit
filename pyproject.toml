@@ -46,6 +46,7 @@ all = [
 [project.scripts]
 astribot-ee34-convert = "astribot_ee34.convert:main"
 astribot-ee34-render-video = "astribot_ee34.render_video:main"
+astribot-ee34-render-rollout = "astribot_ee34.render_rollout:main"
 astribot-ee34-validate-contract = "astribot_ee34.validate_contract:main"
 astribot-ee34-validate-dataset = "astribot_ee34.validate_dataset:main"
 astribot-ee34-validate-kinematics = "astribot_ee34.validate_kinematics:main"
