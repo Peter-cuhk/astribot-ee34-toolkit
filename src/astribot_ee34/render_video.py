@@ -2,9 +2,9 @@
 
 Unlike :mod:`astribot_ee34.visualize` (an interactive Viser server that has to be
 screen-recorded), this module composites frames headlessly and writes an MP4
-directly. The layout puts the three recorded cameras in the large left block and
-the URDF skeleton in the narrow right block, with the episode language prompt in
-the title bar.
+directly. The layout puts the recorded cameras in the large left block and the
+URDF skeleton in the narrow right block, with the episode language prompt in the
+title bar. ``--head-only`` keeps just the head camera on the left.
 """
 
 from __future__ import annotations
@@ -58,43 +58,73 @@ FONT_DIR = Path(get_data_path()) / "fonts/ttf"
 
 @dataclass(frozen=True)
 class Layout:
-    """Pixel boxes for one composited frame, as (left, top, width, height)."""
+    """Pixel boxes for one composited frame, as (left, top, width, height).
+
+    ``left_wrist`` and ``right_wrist`` are ``None`` in head-only layouts.
+    """
 
     size: tuple[int, int]
     title: tuple[int, int, int, int]
     head: tuple[int, int, int, int]
-    left_wrist: tuple[int, int, int, int]
-    right_wrist: tuple[int, int, int, int]
+    left_wrist: tuple[int, int, int, int] | None
+    right_wrist: tuple[int, int, int, int] | None
     skeleton: tuple[int, int, int, int]
 
+    def camera_panels(self) -> tuple[tuple[str, tuple[int, int, int, int]], ...]:
+        """The camera boxes to draw, in paste order."""
+        panels = [("head", self.head)]
+        if self.left_wrist is not None and self.right_wrist is not None:
+            panels.append(("left_wrist", self.left_wrist))
+            panels.append(("right_wrist", self.right_wrist))
+        return tuple(panels)
 
-def build_layout(width: int, height: int, camera_fraction: float) -> Layout:
+
+def build_layout(width: int, height: int, camera_fraction: float, *, wrists: bool = True) -> Layout:
     """Split the canvas into a title bar, a camera block and a skeleton block.
 
     All three cameras are 16:9, so the camera block height is fixed by its width:
-    one full-width view plus a half-width row is ``27/32`` of the block width.
-    The camera block width is capped by ``camera_fraction`` and by the height
-    that is actually left over, whichever binds first.
+    one full-width view plus a half-width row is ``27/32`` of the block width,
+    or ``9/16`` when the wrist row is dropped. The camera block width is capped
+    by ``camera_fraction`` and by the height that is actually left over,
+    whichever binds first; the block is then centred in the body area, which
+    matters for head-only layouts where ``camera_fraction`` usually binds.
     """
     body_top = TITLE_H
     body_h = height - TITLE_H - 2 * PAD
-    by = body_top + PAD
     max_cam_w = int((width - 3 * PAD) * camera_fraction)
-    cam_w = min(max_cam_w, int((body_h - 2 * LABEL_H - GAP) * 32 / 27))
-    head_h = round(cam_w * 9 / 16)
-    wrist_w = (cam_w - GAP) // 2
-    wrist_h = round(wrist_w * 9 / 16)
-    wrist_top = by + LABEL_H + head_h + GAP + LABEL_H
+    if wrists:
+        cam_w = min(max_cam_w, int((body_h - 2 * LABEL_H - GAP) * 32 / 27))
+        head_h = round(cam_w * 9 / 16)
+        wrist_w = (cam_w - GAP) // 2
+        wrist_h = round(wrist_w * 9 / 16)
+        block_h = LABEL_H + head_h + GAP + LABEL_H + wrist_h
+    else:
+        cam_w = min(max_cam_w, int((body_h - LABEL_H) * 16 / 9))
+        head_h = round(cam_w * 9 / 16)
+        block_h = LABEL_H + head_h
+    by = body_top + PAD + (body_h - block_h) // 2
     skel_x = PAD + cam_w + PAD
     skel_w = width - skel_x - PAD
-    skel_h = LABEL_H + head_h + GAP + LABEL_H + wrist_h
+    if not wrists:
+        # A 16:9 head panel wide enough to leave room for the skeleton cannot
+        # also fill the body height, so it is letterboxed and centred while the
+        # skeleton takes the full height of its column.
+        return Layout(
+            size=(width, height),
+            title=(0, 0, width, TITLE_H),
+            head=(PAD, by + LABEL_H, cam_w, head_h),
+            left_wrist=None,
+            right_wrist=None,
+            skeleton=(skel_x, body_top + PAD, skel_w, body_h),
+        )
+    wrist_top = by + LABEL_H + head_h + GAP + LABEL_H
     return Layout(
         size=(width, height),
         title=(0, 0, width, TITLE_H),
         head=(PAD, by + LABEL_H, cam_w, head_h),
         left_wrist=(PAD, wrist_top, wrist_w, wrist_h),
         right_wrist=(PAD + wrist_w + GAP, wrist_top, wrist_w, wrist_h),
-        skeleton=(skel_x, by, skel_w, skel_h),
+        skeleton=(skel_x, by, skel_w, block_h),
     )
 
 
@@ -259,10 +289,12 @@ def render_episode(args: argparse.Namespace) -> Path:
     prompt = args.prompt if args.prompt is not None else _load_prompt(split_root)
     parquet_file = _find_parquet(split_root, local_index)
 
-    table = pq.read_table(parquet_file, columns=[*IMAGE_COLUMNS.values(), "frame_index"])
+    layout = build_layout(args.width, args.height, args.camera_fraction, wrists=not args.head_only)
+    wanted = {label: IMAGE_COLUMNS[label] for label, _ in layout.camera_panels()}
+    table = pq.read_table(parquet_file, columns=[*wanted.values(), "frame_index"])
     if table.num_rows != frame_count:
         raise ValueError(f"parquet length {table.num_rows} != provenance {frame_count}")
-    images = {label: table[column].combine_chunks().to_pylist() for label, column in IMAGE_COLUMNS.items()}
+    images = {label: table[column].combine_chunks().to_pylist() for label, column in wanted.items()}
 
     key = JOINT_STATE_KEY if args.stream == "state" else JOINT_ACTION_KEY
     joints = _load_joints(hdf5_path, key, frame_count)
@@ -279,7 +311,6 @@ def render_episode(args: argparse.Namespace) -> Path:
         fk = model.fk(q20)
         world_frames.append({link: world @ fk[link] for link in FRAME_LABELS})
 
-    layout = build_layout(args.width, args.height, args.camera_fraction)
     skeleton_size = (layout.skeleton[2], layout.skeleton[3])
     renderer = SkeletonRenderer(
         model, world_segments, skeleton_size, args.elev, args.azim, args.axis_length, args.zoom
@@ -299,11 +330,7 @@ def render_episode(args: argparse.Namespace) -> Path:
             draw = ImageDraw.Draw(canvas)
             draw.rectangle(layout.title, fill=TITLE_BG)
             draw.text((PAD + 16, TITLE_H // 2), prompt, font=title_font, fill=TEXT, anchor="lm")
-            for label, box in (
-                ("head", layout.head),
-                ("left_wrist", layout.left_wrist),
-                ("right_wrist", layout.right_wrist),
-            ):
+            for label, box in layout.camera_panels():
                 _paste(canvas, _decode(images[label][frame], parquet_file), box)
                 _draw_label(draw, label, box, label_font)
             _paste(canvas, renderer.render(world_segments[frame], world_frames[frame]), layout.skeleton)
@@ -327,6 +354,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--height", type=int, default=1080)
     parser.add_argument("--camera-fraction", type=float, default=0.66)
+    parser.add_argument(
+        "--head-only",
+        action="store_true",
+        help="drop the left_wrist/right_wrist row: head camera left, skeleton right",
+    )
     parser.add_argument("--elev", type=float, default=16.0)
     parser.add_argument("--azim", type=float, default=-72.0)
     parser.add_argument("--axis-length", type=float, default=0.16)

@@ -49,17 +49,23 @@ def default_prompt(hdf5_path: Path) -> str:
 
 def render_rollout(hdf5_path: Path, output: Path, args: argparse.Namespace) -> Path:
     key = rv.JOINT_STATE_KEY if args.stream == "state" else rv.JOINT_ACTION_KEY
+    layout = rv.build_layout(args.width, args.height, args.camera_fraction, wrists=not args.head_only)
+    drawn = {label for label, _ in layout.camera_panels()}
     with h5py.File(hdf5_path, "r") as handle:
         joints = np.asarray(handle[key][:], dtype=np.float64)
+        # Every camera's frame count is still checked below; only the panels
+        # that get drawn are decoded into memory.
+        counts = {label: len(handle[f"images_dict/{cam}/rgb_size"]) for label, cam in CAMERAS.items()}
         images = {
             label: split_jpeg_blob(handle[f"images_dict/{cam}/rgb"][:], handle[f"images_dict/{cam}/rgb_size"][:])
             for label, cam in CAMERAS.items()
+            if label in drawn
         }
     if joints.ndim != 2 or joints.shape[1] != C.JOINT_DIM:
         raise ValueError(f"{key} shape {joints.shape} != (N, {C.JOINT_DIM})")
-    for label, frames in images.items():
-        if len(frames) != len(joints):
-            raise ValueError(f"{label}: {len(frames)} images != {len(joints)} joint frames")
+    for label, count in counts.items():
+        if count != len(joints):
+            raise ValueError(f"{label}: {count} images != {len(joints)} joint frames")
     prompt = args.prompt if args.prompt is not None else default_prompt(hdf5_path)
 
     model = kin.AstribotKinematics(args.urdf, args.torso_config)
@@ -73,7 +79,6 @@ def render_rollout(hdf5_path: Path, output: Path, args: argparse.Namespace) -> P
         fk = model.fk(q20)
         world_frames.append({link: world @ fk[link] for link in rv.FRAME_LABELS})
 
-    layout = rv.build_layout(args.width, args.height, args.camera_fraction)
     renderer = rv.SkeletonRenderer(
         model, world_segments, (layout.skeleton[2], layout.skeleton[3]),
         args.elev, args.azim, args.axis_length, args.zoom,
@@ -93,11 +98,7 @@ def render_rollout(hdf5_path: Path, output: Path, args: argparse.Namespace) -> P
             draw = ImageDraw.Draw(canvas)
             draw.rectangle(layout.title, fill=rv.TITLE_BG)
             draw.text((rv.PAD + 16, rv.TITLE_H // 2), prompt, font=title_font, fill=rv.TEXT, anchor="lm")
-            for label, box in (
-                ("head", layout.head),
-                ("left_wrist", layout.left_wrist),
-                ("right_wrist", layout.right_wrist),
-            ):
+            for label, box in layout.camera_panels():
                 rv._paste(canvas, Image.open(BytesIO(images[label][frame])).convert("RGB"), box)
                 rv._draw_label(draw, label, box, label_font)
             rv._paste(canvas, renderer.render(world_segments[frame], world_frames[frame]), layout.skeleton)
@@ -119,6 +120,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--width", type=int, default=1920)
     parser.add_argument("--height", type=int, default=1080)
     parser.add_argument("--camera-fraction", type=float, default=0.66)
+    parser.add_argument(
+        "--head-only",
+        action="store_true",
+        help="drop the left_wrist/right_wrist row: head camera left, skeleton right",
+    )
     parser.add_argument("--elev", type=float, default=16.0)
     parser.add_argument("--azim", type=float, default=-72.0)
     parser.add_argument("--axis-length", type=float, default=0.16)

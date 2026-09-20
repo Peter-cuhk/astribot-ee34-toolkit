@@ -200,6 +200,12 @@ frames are the EE34 `torso`/`left`/`right` end effectors, labelled `head`,
 `left_wrist` and `right_wrist` so they read against the camera panel they belong
 to.
 
+`--head-only` drops the `left_wrist`/`right_wrist` row for a two-panel clip: the
+head camera on the left, the skeleton on the right. A 16:9 head panel wide
+enough to leave room for the skeleton cannot also fill the frame height, so it
+is letterboxed and vertically centred while the skeleton column runs full
+height; raise `--camera-fraction` to trade skeleton width for head size.
+
 Rendered clip: [episode 269, prompt-titled, camera-first](docs/videos/episode_269_prompt_cameras_main.mp4)
 
 ### Raw rollouts
@@ -216,8 +222,10 @@ uv run astribot-ee34-render-rollout \
 ```
 
 The title defaults to the `recording.json` task with underscores replaced by
-spaces; pass `--prompt` for the exact language instruction. Frame count follows
-the HDF5 (30 Hz), and every camera must have one image per joint frame.
+spaces; pass `--prompt` for the exact language instruction. `--head-only` works
+here too. Frame count follows the HDF5 (30 Hz), and every camera must have one
+image per joint frame -- that check covers all three cameras even when only the
+head panel is drawn.
 
 ## Example disagreement
 
