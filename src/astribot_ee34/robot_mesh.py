@@ -62,12 +62,43 @@ class RobotMesh:
             batches.append(world[link.faces])
         return np.concatenate(batches, axis=0)
 
+    def bounds(
+        self, configurations: list[np.ndarray], bases: list[np.ndarray]
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """World-space AABB of the body over a whole episode.
+
+        Framing the view on the joint-centre skeleton cuts the top of the head
+        off: the head shell reaches ~0.13 m above the highest joint centre. This
+        walks the episode transforming each link's own AABB corners -- 8 points
+        per link rather than every vertex -- which is a slight over-estimate of
+        the true hull but cheap enough to run per frame.
+        """
+        corners = {node: _aabb_corners(link.vertices) for node, link in self.links.items()}
+        low = np.full(3, np.inf)
+        high = np.full(3, -np.inf)
+        for q20, base in zip(configurations, bases):
+            self.urdf.update_cfg(np.asarray(q20, dtype=np.float64))
+            for node, box in corners.items():
+                transform = base @ np.asarray(self.urdf.scene.graph.get(node)[0], dtype=np.float64)
+                world = box @ transform[:3, :3].T + transform[:3, 3]
+                low = np.minimum(low, world.min(axis=0))
+                high = np.maximum(high, world.max(axis=0))
+        return low, high
+
     def shade(self, triangles: np.ndarray) -> np.ndarray:
         """Flat Lambert shading, one RGB per triangle."""
         normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
         normals /= np.linalg.norm(normals, axis=1, keepdims=True) + 1e-12
         lit = AMBIENT + (1.0 - AMBIENT) * np.abs(normals @ self.light)
         return np.clip(lit[:, None] * self.color[None, :], 0.0, 1.0)
+
+
+def _aabb_corners(vertices: np.ndarray) -> np.ndarray:
+    low, high = vertices.min(axis=0), vertices.max(axis=0)
+    return np.asarray(
+        [[x, y, z] for x in (low[0], high[0]) for y in (low[1], high[1]) for z in (low[2], high[2])],
+        dtype=np.float64,
+    )
 
 
 def _parse_color(value: str) -> np.ndarray:

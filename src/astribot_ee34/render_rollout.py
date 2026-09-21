@@ -96,6 +96,7 @@ def render_rollout(
     renderer = rv.SkeletonRenderer(
         model, world_segments, (layout.skeleton[2], layout.skeleton[3]),
         args.elev, args.azim, args.axis_length, args.zoom, mesh_model,
+        None if mesh_model is None else mesh_model.bounds(configurations, bases),
     )
     title_font = ImageFont.truetype(str(rv.FONT_DIR / "DejaVuSans-Bold.ttf"), 34)
     label_font = ImageFont.truetype(str(rv.FONT_DIR / "DejaVuSans.ttf"), 15)

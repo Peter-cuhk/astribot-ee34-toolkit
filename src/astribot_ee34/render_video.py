@@ -197,6 +197,7 @@ class SkeletonRenderer:
         axis_length: float,
         zoom: float,
         mesh: RobotMesh | None = None,
+        body_bounds: tuple[np.ndarray, np.ndarray] | None = None,
     ) -> None:
         self.model = model
         self.mesh = mesh
@@ -211,15 +212,18 @@ class SkeletonRenderer:
         self.ax.view_init(elev=elev, azim=azim)
 
         # One fixed cube around the whole episode: the camera never moves, and
-        # equal half-extents on every axis keep the robot undistorted.
-        points = np.concatenate([segments.reshape(-1, 3) for segments in world_segments], axis=0)
-        low = points.min(axis=0)
-        high = points.max(axis=0)
+        # equal half-extents on every axis keep the robot undistorted. What the
+        # cube has to contain is whatever gets drawn, so the mesh view measures
+        # the body: the head shell reaches ~0.13 m above the highest joint
+        # centre, and framing on the segments alone sliced the top of it off.
+        if body_bounds is None:
+            points = np.concatenate([segments.reshape(-1, 3) for segments in world_segments], axis=0)
+            low, high = points.min(axis=0), points.max(axis=0)
+        else:
+            low, high = (np.array(bound, dtype=np.float64) for bound in body_bounds)
         low[2] = 0.0
         center = (low + high) / 2.0
-        # Link segments only bound the joint centres; the solid body sticks out
-        # past them, so the mesh view needs a wider cube.
-        radius = float(np.max(high - low)) / 2.0 * (1.12 if mesh is not None else 1.08)
+        radius = float(np.max(high - low)) / 2.0 * 1.08
         self.ax.set_xlim(center[0] - radius, center[0] + radius)
         self.ax.set_ylim(center[1] - radius, center[1] + radius)
         self.ax.set_zlim(center[2] - radius, center[2] + radius)
@@ -355,7 +359,8 @@ def render_episode(args: argparse.Namespace) -> Path:
 
     skeleton_size = (layout.skeleton[2], layout.skeleton[3])
     renderer = SkeletonRenderer(
-        model, world_segments, skeleton_size, args.elev, args.azim, args.axis_length, args.zoom, mesh
+        model, world_segments, skeleton_size, args.elev, args.azim, args.axis_length, args.zoom,
+        mesh, None if mesh is None else mesh.bounds(configurations, bases),
     )
     title_font = ImageFont.truetype(str(FONT_DIR / "DejaVuSans-Bold.ttf"), 34)
     label_font = ImageFont.truetype(str(FONT_DIR / "DejaVuSans.ttf"), 15)

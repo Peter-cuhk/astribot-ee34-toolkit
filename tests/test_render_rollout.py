@@ -83,3 +83,15 @@ def test_parse_color_rejects_a_bad_string() -> None:
 
     with pytest.raises(ValueError, match="6-digit hex"):
         _parse_color("blue")
+
+
+def test_aabb_corners_span_the_vertex_box() -> None:
+    from astribot_ee34.robot_mesh import _aabb_corners
+
+    vertices = np.array([[0.0, 0.0, 0.0], [1.0, 2.0, 3.0], [0.5, 1.0, 1.0]])
+
+    corners = _aabb_corners(vertices)
+
+    assert corners.shape == (8, 3)
+    assert corners.min(axis=0) == pytest.approx([0.0, 0.0, 0.0])
+    assert corners.max(axis=0) == pytest.approx([1.0, 2.0, 3.0])
