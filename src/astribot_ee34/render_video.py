@@ -184,6 +184,22 @@ def _load_joints(hdf5_path: Path, key: str, frame_count: int) -> np.ndarray:
     return joints
 
 
+def _load_grippers(hdf5_path: Path, stream: str, frame_count: int) -> list[tuple[float, float]]:
+    """Recorded gripper opening per frame, as a 0-100 percentage per side."""
+    import h5py
+
+    group = "poses_dict" if stream == "state" else "command_poses_dict"
+    with h5py.File(hdf5_path, "r") as handle:
+        sides = [
+            np.asarray(handle[f"{group}/astribot_gripper_{side}"][:], dtype=np.float64).ravel()
+            for side in ("left", "right")
+        ]
+    for side, values in zip(("left", "right"), sides):
+        if len(values) != frame_count:
+            raise ValueError(f"{side} gripper has {len(values)} samples != {frame_count} frames")
+    return [(float(left), float(right)) for left, right in zip(*sides)]
+
+
 class SkeletonRenderer:
     """Fixed-camera matplotlib view of the joint-FK skeleton and its EE frames."""
 
@@ -263,13 +279,14 @@ class SkeletonRenderer:
         frames: dict[str, np.ndarray],
         q20: np.ndarray | None = None,
         base: np.ndarray | None = None,
+        grippers: tuple[float, float] | None = None,
     ) -> Image.Image:
         if self.mesh is None:
             self.skeleton.set_segments(list(segments))
         else:
             if q20 is None or base is None:
                 raise ValueError("mesh rendering needs the per-frame q20 and base transform")
-            triangles = self.mesh.triangles(q20, base)
+            triangles = self.mesh.triangles(q20, base, grippers)
             self.solid.set_verts(triangles)
             self.solid.set_facecolor(self.mesh.shade(triangles))
         axis_segments: list[np.ndarray] = []
@@ -338,6 +355,7 @@ def render_episode(args: argparse.Namespace) -> Path:
 
     key = JOINT_STATE_KEY if args.stream == "state" else JOINT_ACTION_KEY
     joints = _load_joints(hdf5_path, key, frame_count)
+    grippers = _load_grippers(hdf5_path, args.stream, frame_count)
     model = kin.AstribotKinematics(args.urdf, args.torso_config)
 
     world_segments: list[np.ndarray] = []
@@ -355,12 +373,12 @@ def render_episode(args: argparse.Namespace) -> Path:
         configurations.append(q20)
         bases.append(base)
 
-    mesh = RobotMesh(args.urdf, args.robot_color) if args.robot_style == "mesh" else None
+    mesh = RobotMesh(args.urdf, args.robot_color, args.gripper_urdf) if args.robot_style == "mesh" else None
 
     skeleton_size = (layout.skeleton[2], layout.skeleton[3])
     renderer = SkeletonRenderer(
         model, world_segments, skeleton_size, args.elev, args.azim, args.axis_length, args.zoom,
-        mesh, None if mesh is None else mesh.bounds(configurations, bases),
+        mesh, None if mesh is None else mesh.bounds(configurations, bases, grippers),
     )
     title_font = ImageFont.truetype(str(FONT_DIR / "DejaVuSans-Bold.ttf"), 34)
     label_font = ImageFont.truetype(str(FONT_DIR / "DejaVuSans.ttf"), 15)
@@ -381,7 +399,8 @@ def render_episode(args: argparse.Namespace) -> Path:
                 _paste(canvas, _decode(images[label][frame], parquet_file), box)
                 _draw_label(draw, label, box, label_font)
             panel = renderer.render(
-                world_segments[frame], world_frames[frame], configurations[frame], bases[frame]
+                world_segments[frame], world_frames[frame], configurations[frame], bases[frame],
+                grippers[frame],
             )
             _paste(canvas, panel, layout.skeleton)
             writer.append_data(np.asarray(canvas))
@@ -414,6 +433,12 @@ def _parse_args() -> argparse.Namespace:
         choices=("skeleton", "mesh"),
         default="skeleton",
         help="3D panel: joint skeleton lines, or the solid low-poly robot body",
+    )
+    parser.add_argument(
+        "--gripper-urdf",
+        type=Path,
+        default=None,
+        help="second URDF to take gripper links from; the SDK body URDF has none",
     )
     parser.add_argument(
         "--robot-color",

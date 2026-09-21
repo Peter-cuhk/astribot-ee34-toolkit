@@ -25,6 +25,14 @@ from . import robot_mesh
 from .robot_mesh import RobotMesh
 
 CAMERAS = {"head": "head", "left_wrist": "left", "right_wrist": "right"}
+# Recorded gripper opening, as a 0-100 percentage, measured and commanded.
+GRIPPER_KEYS = {
+    "state": ("poses_dict/astribot_gripper_left", "poses_dict/astribot_gripper_right"),
+    "action": (
+        "command_poses_dict/astribot_gripper_left",
+        "command_poses_dict/astribot_gripper_right",
+    ),
+}
 
 
 def split_jpeg_blob(blob: np.ndarray, sizes: np.ndarray) -> list[bytes]:
@@ -64,6 +72,14 @@ def render_rollout(
         # Every camera's frame count is still checked below; only the panels
         # that get drawn are decoded into memory.
         counts = {label: len(handle[f"images_dict/{cam}/rgb_size"]) for label, cam in CAMERAS.items()}
+        left_key, right_key = GRIPPER_KEYS[args.stream]
+        grippers = [
+            (float(left), float(right))
+            for left, right in zip(
+                np.asarray(handle[left_key][:], dtype=np.float64).ravel(),
+                np.asarray(handle[right_key][:], dtype=np.float64).ravel(),
+            )
+        ]
         images = {
             label: split_jpeg_blob(handle[f"images_dict/{cam}/rgb"][:], handle[f"images_dict/{cam}/rgb_size"][:])
             for label, cam in CAMERAS.items()
@@ -74,6 +90,8 @@ def render_rollout(
     for label, count in counts.items():
         if count != len(joints):
             raise ValueError(f"{label}: {count} images != {len(joints)} joint frames")
+    if len(grippers) != len(joints):
+        raise ValueError(f"gripper: {len(grippers)} samples != {len(joints)} joint frames")
     prompt = args.prompt if args.prompt is not None else default_prompt(hdf5_path)
 
     model = kin.AstribotKinematics(args.urdf, args.torso_config)
@@ -92,11 +110,11 @@ def render_rollout(
         bases.append(base)
 
     if mesh_model is None and args.robot_style == "mesh":
-        mesh_model = RobotMesh(args.urdf, args.robot_color)
+        mesh_model = RobotMesh(args.urdf, args.robot_color, args.gripper_urdf)
     renderer = rv.SkeletonRenderer(
         model, world_segments, (layout.skeleton[2], layout.skeleton[3]),
         args.elev, args.azim, args.axis_length, args.zoom, mesh_model,
-        None if mesh_model is None else mesh_model.bounds(configurations, bases),
+        None if mesh_model is None else mesh_model.bounds(configurations, bases, grippers),
     )
     title_font = ImageFont.truetype(str(rv.FONT_DIR / "DejaVuSans-Bold.ttf"), 34)
     label_font = ImageFont.truetype(str(rv.FONT_DIR / "DejaVuSans.ttf"), 15)
@@ -117,7 +135,8 @@ def render_rollout(
                 rv._paste(canvas, Image.open(BytesIO(images[label][frame])).convert("RGB"), box)
                 rv._draw_label(draw, label, box, label_font)
             panel = renderer.render(
-                world_segments[frame], world_frames[frame], configurations[frame], bases[frame]
+                world_segments[frame], world_frames[frame], configurations[frame], bases[frame],
+                grippers[frame],
             )
             rv._paste(canvas, panel, layout.skeleton)
             writer.append_data(np.asarray(canvas))
@@ -150,6 +169,12 @@ def _parse_args() -> argparse.Namespace:
         help="3D panel: joint skeleton lines, or the solid low-poly robot body",
     )
     parser.add_argument(
+        "--gripper-urdf",
+        type=Path,
+        default=None,
+        help="second URDF to take gripper links from; the SDK body URDF has none",
+    )
+    parser.add_argument(
         "--robot-color",
         default=robot_mesh.DEFAULT_COLOR,
         help="body colour for --robot-style mesh, as #rrggbb",
@@ -172,7 +197,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     # Hull extraction takes a few seconds, so batches share one mesh model.
-    mesh_model = RobotMesh(args.urdf, args.robot_color) if args.robot_style == "mesh" else None
+    mesh_model = RobotMesh(args.urdf, args.robot_color, args.gripper_urdf) if args.robot_style == "mesh" else None
     for rollout in args.rollouts:
         hdf5_path = resolve_hdf5(rollout)
         output = args.output_dir / f"{hdf5_path.parent.name}.mp4"

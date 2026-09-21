@@ -95,3 +95,26 @@ def test_aabb_corners_span_the_vertex_box() -> None:
     assert corners.shape == (8, 3)
     assert corners.min(axis=0) == pytest.approx([0.0, 0.0, 0.0])
     assert corners.max(axis=0) == pytest.approx([1.0, 2.0, 3.0])
+
+
+def test_gripper_angle_maps_percent_to_the_closed_open_sweep() -> None:
+    from astribot_ee34 import robot_mesh as rm
+
+    def theta(percent: float) -> float:
+        return rm.THETA_CLOSED + (rm.THETA_OPEN - rm.THETA_CLOSED) * min(max(percent, 0.0), 100.0) / 100.0
+
+    assert theta(0.0) == pytest.approx(rm.THETA_CLOSED)
+    assert theta(100.0) == pytest.approx(rm.THETA_OPEN)
+    # The recorded stream dips slightly below zero and is clamped, not wrapped.
+    assert theta(-0.03) == pytest.approx(rm.THETA_CLOSED)
+    assert theta(0.0) < theta(50.0) < theta(100.0)
+
+
+def test_gripper_joint_signs_mirror_the_two_fingers() -> None:
+    from astribot_ee34.robot_mesh import GRIPPER_JOINT_SIGNS
+
+    # One four-bar per finger: the proximal pair leads, the distal link counter-
+    # rotates to keep the tip parallel, and the R finger mirrors the L finger.
+    assert GRIPPER_JOINT_SIGNS["L1"] == GRIPPER_JOINT_SIGNS["L2"] == -GRIPPER_JOINT_SIGNS["L11"]
+    for finger in ("1", "2", "11"):
+        assert GRIPPER_JOINT_SIGNS[f"L{finger}"] == -GRIPPER_JOINT_SIGNS[f"R{finger}"]

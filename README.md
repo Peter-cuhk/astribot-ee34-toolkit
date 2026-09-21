@@ -211,6 +211,21 @@ The view cube is fitted to the body rather than to the joint-centre skeleton,
 which the head shell overhangs by ~0.13 m -- framing on the segments cut the top
 of the head off.
 
+The SDK deployment URDF has no gripper: its arms end at `*_tool_link`. Pass
+`--gripper-urdf` pointing at Astribot's published
+[`astribot_whole_body_maniskill.urdf`](https://github.com/Astribot-Dev/astribot_descriptions)
+(Apache-2.0) to mount its gripper subtree on this model's own arm links. Only
+that subtree is borrowed -- the donor's torso and head meshes hull into visible
+junk -- and the links are posed relative to the mount, so the donor's arm joints
+never have to agree with the body model's. The fingers follow the recorded
+`poses_dict/astribot_gripper_{left,right}` stream, or the `command_poses_dict`
+one under `--stream action`.
+
+That stream is a 0-100 percentage with no published angle calibration, and the
+URDF carries no `<mimic>` tags, so the six finger joints are driven from one
+angle whose signs and closed/open endpoints were read off the geometry. Treat
+the opening as a visual approximation, not a measurement.
+
 `--head-only` drops the `left_wrist`/`right_wrist` row for a two-panel clip: the
 head camera on the left, the skeleton on the right. A 16:9 head panel wide
 enough to leave room for the skeleton cannot also fill the frame height, so it

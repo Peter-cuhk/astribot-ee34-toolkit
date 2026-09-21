@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 import numpy as np
 
@@ -27,6 +28,18 @@ LIGHT_DIRECTION = np.asarray([0.4, -0.7, 0.6], dtype=np.float64)
 AMBIENT = 0.34
 DEFAULT_COLOR = "#B0A99F"
 
+# The parallel gripper is a four-bar per finger with no <mimic> in the URDF, so
+# its six joints are driven from one angle. The signs were read off the model:
+# L1/L2 lead, the distal L11 counter-rotates to keep the tip parallel, and the R
+# finger mirrors all three. THETA_CLOSED is where the fingers meet and
+# THETA_OPEN is the URDF zero pose; the recorded gripper stream is a 0-100
+# percentage with no documented angle calibration, so this mapping is a visual
+# approximation, not a kinematic claim.
+GRIPPER_JOINT_SIGNS = {"L1": 1.0, "L2": 1.0, "L11": -1.0, "R1": -1.0, "R2": -1.0, "R11": 1.0}
+THETA_CLOSED = -1.0
+THETA_OPEN = 0.0
+MOUNT_SIDES = ("left", "right")
+
 
 @dataclass(frozen=True)
 class LinkGeometry:
@@ -36,11 +49,84 @@ class LinkGeometry:
     faces: np.ndarray
 
 
+class GripperMesh:
+    """Gripper links lifted from a second URDF and hung off each arm's last link.
+
+    The SDK's deployment URDF has no gripper. The published
+    ``astribot_whole_body_maniskill.urdf`` does, but its torso and head use
+    different meshes that hull into visible junk, so only the gripper subtree is
+    taken from it and mounted on the body model's own arm link. Poses are
+    returned relative to that mount, so the donor URDF's arm joints stay at zero
+    and never have to agree with the body model's.
+    """
+
+    MOUNTS: ClassVar[dict[str, str]] = {
+        "left": "astribot_arm_left_link_7",
+        "right": "astribot_arm_right_link_7",
+    }
+
+    def __init__(self, urdf_path: Path) -> None:
+        self.urdf = kin.load_visual_urdf(urdf_path)
+        actuated = set(self.urdf.actuated_joint_names)
+        self.joints = {
+            side: {finger: f"astribot_gripper_{side}_joint_{finger}" for finger in GRIPPER_JOINT_SIGNS}
+            for side in MOUNT_SIDES
+        }
+        missing = [
+            name
+            for joints in self.joints.values()
+            for name in joints.values()
+            if name not in actuated
+        ]
+        if missing:
+            raise kin.KinematicsConfigError(f"gripper URDF {urdf_path} is missing joints: {missing}")
+        parents = self.urdf.scene.graph.transforms.parents
+        self.links: dict[str, list[tuple[str, LinkGeometry]]] = {side: [] for side in MOUNT_SIDES}
+        for node in self.urdf.scene.graph.nodes_geometry:
+            parent = str(parents.get(node, ""))
+            for side in MOUNT_SIDES:
+                if parent.startswith(f"astribot_gripper_{side}_"):
+                    geometry = _hull_geometry(self.urdf.scene.geometry[self.urdf.scene.graph[node][1]])
+                    if geometry is not None:
+                        self.links[side].append((node, geometry))
+        for side in MOUNT_SIDES:
+            if not self.links[side]:
+                raise kin.KinematicsConfigError(f"gripper URDF {urdf_path} has no {side} gripper geometry")
+        self.face_count = sum(len(link.faces) for side in MOUNT_SIDES for _, link in self.links[side])
+        self._zero = {name: 0.0 for name in self.urdf.actuated_joint_names}
+
+    def posed(self, side: str, percent: float) -> list[tuple[LinkGeometry, np.ndarray]]:
+        """Each gripper link's geometry and its pose relative to the arm mount."""
+        theta = THETA_CLOSED + (THETA_OPEN - THETA_CLOSED) * float(np.clip(percent, 0.0, 100.0)) / 100.0
+        configuration = dict(self._zero)
+        for finger, sign in GRIPPER_JOINT_SIGNS.items():
+            configuration[self.joints[side][finger]] = sign * theta
+        self.urdf.update_cfg(configuration)
+        mount = np.asarray(self.urdf.scene.graph.get(self.MOUNTS[side])[0], dtype=np.float64)
+        inverse = np.linalg.inv(mount)
+        return [
+            (link, inverse @ np.asarray(self.urdf.scene.graph.get(node)[0], dtype=np.float64))
+            for node, link in self.links[side]
+        ]
+
+
 class RobotMesh:
     """Per-link convex shells plus the per-frame world-space triangle build."""
 
-    def __init__(self, urdf_path: Path, color: str = DEFAULT_COLOR) -> None:
+    def __init__(
+        self,
+        urdf_path: Path,
+        color: str = DEFAULT_COLOR,
+        gripper_urdf_path: Path | None = None,
+    ) -> None:
         self.urdf = kin.load_visual_urdf(urdf_path)
+        actuated = set(self.urdf.actuated_joint_names)
+        missing = [name for name in kin.EXPECTED_JOINT_NAMES if name not in actuated]
+        if missing:
+            raise kin.KinematicsConfigError(
+                f"visual URDF {urdf_path} is missing actuated joints: {missing}"
+            )
+        self.gripper = None if gripper_urdf_path is None else GripperMesh(gripper_urdf_path)
         self.links: dict[str, LinkGeometry] = {}
         for node in self.urdf.scene.graph.nodes_geometry:
             geometry = _hull_geometry(self.urdf.scene.geometry[self.urdf.scene.graph[node][1]])
@@ -52,18 +138,41 @@ class RobotMesh:
         self.light = LIGHT_DIRECTION / np.linalg.norm(LIGHT_DIRECTION)
         self.color = _parse_color(color)
 
-    def triangles(self, q20: np.ndarray, base: np.ndarray) -> np.ndarray:
+    def configuration(self, q20: np.ndarray) -> dict[str, float]:
+        """Joint-name -> angle for this visual URDF.
+
+        Addressing joints by name rather than by index keeps the visual model
+        independent of the FK model's joint vector layout.
+        """
+        return dict(zip(kin.EXPECTED_JOINT_NAMES, np.asarray(q20, dtype=np.float64)))
+
+    def triangles(
+        self, q20: np.ndarray, base: np.ndarray, grippers: tuple[float, float] | None = None
+    ) -> np.ndarray:
         """World-space (n, 3, 3) triangles for one configuration."""
-        self.urdf.update_cfg(np.asarray(q20, dtype=np.float64))
+        self.urdf.update_cfg(self.configuration(q20))
         batches: list[np.ndarray] = []
         for node, link in self.links.items():
             transform = base @ np.asarray(self.urdf.scene.graph.get(node)[0], dtype=np.float64)
             world = link.vertices @ transform[:3, :3].T + transform[:3, 3]
             batches.append(world[link.faces])
+        if self.gripper is not None:
+            percents = (0.0, 0.0) if grippers is None else grippers
+            for side, percent in zip(("left", "right"), percents):
+                mount = base @ np.asarray(
+                    self.urdf.scene.graph.get(GripperMesh.MOUNTS[side])[0], dtype=np.float64
+                )
+                for link, relative in self.gripper.posed(side, percent):
+                    transform = mount @ relative
+                    world = link.vertices @ transform[:3, :3].T + transform[:3, 3]
+                    batches.append(world[link.faces])
         return np.concatenate(batches, axis=0)
 
     def bounds(
-        self, configurations: list[np.ndarray], bases: list[np.ndarray]
+        self,
+        configurations: list[np.ndarray],
+        bases: list[np.ndarray],
+        grippers: list[tuple[float, float]] | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
         """World-space AABB of the body over a whole episode.
 
@@ -76,13 +185,26 @@ class RobotMesh:
         corners = {node: _aabb_corners(link.vertices) for node, link in self.links.items()}
         low = np.full(3, np.inf)
         high = np.full(3, -np.inf)
-        for q20, base in zip(configurations, bases):
-            self.urdf.update_cfg(np.asarray(q20, dtype=np.float64))
+        if grippers is None:
+            grippers = [(0.0, 0.0)] * len(configurations)
+        for q20, base, gripper in zip(configurations, bases, grippers):
+            self.urdf.update_cfg(self.configuration(q20))
             for node, box in corners.items():
                 transform = base @ np.asarray(self.urdf.scene.graph.get(node)[0], dtype=np.float64)
                 world = box @ transform[:3, :3].T + transform[:3, 3]
                 low = np.minimum(low, world.min(axis=0))
                 high = np.maximum(high, world.max(axis=0))
+            if self.gripper is None:
+                continue
+            for side, percent in zip(("left", "right"), gripper):
+                mount = base @ np.asarray(
+                    self.urdf.scene.graph.get(GripperMesh.MOUNTS[side])[0], dtype=np.float64
+                )
+                for link, relative in self.gripper.posed(side, percent):
+                    transform = mount @ relative
+                    world = _aabb_corners(link.vertices) @ transform[:3, :3].T + transform[:3, 3]
+                    low = np.minimum(low, world.min(axis=0))
+                    high = np.maximum(high, world.max(axis=0))
         return low, high
 
     def shade(self, triangles: np.ndarray) -> np.ndarray:
