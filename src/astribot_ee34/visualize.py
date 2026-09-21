@@ -7,7 +7,6 @@ import json
 import threading
 import time
 from dataclasses import dataclass
-from functools import partial
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -155,15 +154,7 @@ def _world_pose(chassis3: np.ndarray, local: np.ndarray) -> tuple[np.ndarray, np
 
 
 def _load_visual_urdf(path: Path) -> yourdfpy.URDF:
-    mesh_root = path.parent / "meshes"
-    if not mesh_root.is_dir():
-        raise FileNotFoundError(f"URDF mesh root not found: {mesh_root}")
-    return yourdfpy.URDF.load(
-        path,
-        load_meshes=True,
-        build_scene_graph=True,
-        filename_handler=partial(yourdfpy.filename_handler_magic, dir=mesh_root),
-    )
+    return kin.load_visual_urdf(path)
 
 
 class KinematicsViewer:

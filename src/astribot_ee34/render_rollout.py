@@ -21,6 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 from . import contract as C  # noqa: N812
 from . import kinematics as kin
 from . import render_video as rv
+from .robot_mesh import RobotMesh
 
 CAMERAS = {"head": "head", "left_wrist": "left", "right_wrist": "right"}
 
@@ -47,7 +48,13 @@ def default_prompt(hdf5_path: Path) -> str:
     return C.DEFAULT_PROMPT
 
 
-def render_rollout(hdf5_path: Path, output: Path, args: argparse.Namespace) -> Path:
+def render_rollout(
+    hdf5_path: Path,
+    output: Path,
+    args: argparse.Namespace,
+    mesh_model: RobotMesh | None = None,
+) -> Path:
+    """Render one rollout; ``mesh_model`` is reused across a batch when given."""
     key = rv.JOINT_STATE_KEY if args.stream == "state" else rv.JOINT_ACTION_KEY
     layout = rv.build_layout(args.width, args.height, args.camera_fraction, wrists=not args.head_only)
     drawn = {label for label, _ in layout.camera_panels()}
@@ -71,6 +78,8 @@ def render_rollout(hdf5_path: Path, output: Path, args: argparse.Namespace) -> P
     model = kin.AstribotKinematics(args.urdf, args.torso_config)
     world_segments: list[np.ndarray] = []
     world_frames: list[dict[str, np.ndarray]] = []
+    configurations: list[np.ndarray] = []
+    bases: list[np.ndarray] = []
     for joints25 in joints:
         q20 = kin.joints25_to_urdf20(joints25)
         world = kin.chassis_xyyaw_to_matrix(joints25[C.J_CHASSIS])
@@ -78,10 +87,14 @@ def render_rollout(hdf5_path: Path, output: Path, args: argparse.Namespace) -> P
         world_segments.append(model.skeleton_segments(q20).astype(np.float64) @ base[:3, :3].T + base[:3, 3])
         fk = model.fk(q20)
         world_frames.append({link: world @ fk[link] for link in rv.FRAME_LABELS})
+        configurations.append(q20)
+        bases.append(base)
 
+    if mesh_model is None and args.robot_style == "mesh":
+        mesh_model = RobotMesh(args.urdf)
     renderer = rv.SkeletonRenderer(
         model, world_segments, (layout.skeleton[2], layout.skeleton[3]),
-        args.elev, args.azim, args.axis_length, args.zoom,
+        args.elev, args.azim, args.axis_length, args.zoom, mesh_model,
     )
     title_font = ImageFont.truetype(str(rv.FONT_DIR / "DejaVuSans-Bold.ttf"), 34)
     label_font = ImageFont.truetype(str(rv.FONT_DIR / "DejaVuSans.ttf"), 15)
@@ -101,7 +114,10 @@ def render_rollout(hdf5_path: Path, output: Path, args: argparse.Namespace) -> P
             for label, box in layout.camera_panels():
                 rv._paste(canvas, Image.open(BytesIO(images[label][frame])).convert("RGB"), box)
                 rv._draw_label(draw, label, box, label_font)
-            rv._paste(canvas, renderer.render(world_segments[frame], world_frames[frame]), layout.skeleton)
+            panel = renderer.render(
+                world_segments[frame], world_frames[frame], configurations[frame], bases[frame]
+            )
+            rv._paste(canvas, panel, layout.skeleton)
             writer.append_data(np.asarray(canvas))
     finally:
         writer.close()
@@ -125,6 +141,12 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="drop the left_wrist/right_wrist row: head camera left, skeleton right",
     )
+    parser.add_argument(
+        "--robot-style",
+        choices=("skeleton", "mesh"),
+        default="skeleton",
+        help="3D panel: joint skeleton lines, or the solid low-poly robot body",
+    )
     parser.add_argument("--elev", type=float, default=16.0)
     parser.add_argument("--azim", type=float, default=-72.0)
     parser.add_argument("--axis-length", type=float, default=0.16)
@@ -142,10 +164,12 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+    # Hull extraction takes a few seconds, so batches share one mesh model.
+    mesh_model = RobotMesh(args.urdf) if args.robot_style == "mesh" else None
     for rollout in args.rollouts:
         hdf5_path = resolve_hdf5(rollout)
         output = args.output_dir / f"{hdf5_path.parent.name}.mp4"
-        print(f"wrote {render_rollout(hdf5_path, output, args)}", flush=True)
+        print(f"wrote {render_rollout(hdf5_path, output, args, mesh_model)}", flush=True)
     return 0
 
 

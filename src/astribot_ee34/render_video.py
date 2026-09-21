@@ -24,11 +24,12 @@ matplotlib.use("Agg")
 import imageio.v2 as imageio
 import matplotlib.pyplot as plt
 from matplotlib import get_data_path
-from mpl_toolkits.mplot3d.art3d import Line3DCollection
+from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 from PIL import Image, ImageDraw, ImageFont
 
 from . import contract as C  # noqa: N812
 from . import kinematics as kin
+from .robot_mesh import RobotMesh
 
 IMAGE_COLUMNS = {
     "head": "observation.images.head",
@@ -194,8 +195,10 @@ class SkeletonRenderer:
         azim: float,
         axis_length: float,
         zoom: float,
+        mesh: RobotMesh | None = None,
     ) -> None:
         self.model = model
+        self.mesh = mesh
         self.axis_length = axis_length
         width, height = size
         dpi = 100.0
@@ -213,25 +216,57 @@ class SkeletonRenderer:
         high = points.max(axis=0)
         low[2] = 0.0
         center = (low + high) / 2.0
-        radius = float(np.max(high - low)) / 2.0 * 1.08
+        # Link segments only bound the joint centres; the solid body sticks out
+        # past them, so the mesh view needs a wider cube.
+        radius = float(np.max(high - low)) / 2.0 * (1.12 if mesh is not None else 1.08)
         self.ax.set_xlim(center[0] - radius, center[0] + radius)
         self.ax.set_ylim(center[1] - radius, center[1] + radius)
         self.ax.set_zlim(center[2] - radius, center[2] + radius)
         self.ax.set_box_aspect((1.0, 1.0, 1.0), zoom=zoom)
 
-        grid = Line3DCollection(_floor_grid(center, radius), colors="#c8ced8", linewidths=0.8)
+        if mesh is not None:
+            # A solid body is one collection, so matplotlib's per-artist depth
+            # sort puts the floor grid on top of the base. The camera is fixed
+            # and the robot always stands on the floor, so fix the order by hand.
+            self.ax.computed_zorder = False
+        grid = Line3DCollection(
+            _floor_grid(center, radius), colors="#c8ced8", linewidths=0.8, zorder=0
+        )
         self.ax.add_collection3d(grid)
-        self.skeleton = Line3DCollection(np.zeros((1, 2, 3)), colors=SKELETON_COLOR, linewidths=7.0)
-        self.ax.add_collection3d(self.skeleton)
-        self.axes_art = Line3DCollection(np.zeros((1, 2, 3)), colors=["#000000"], linewidths=2.6)
+        if mesh is None:
+            self.skeleton = Line3DCollection(np.zeros((1, 2, 3)), colors=SKELETON_COLOR, linewidths=7.0)
+            self.ax.add_collection3d(self.skeleton)
+            self.solid = None
+        else:
+            self.skeleton = None
+            self.solid = Poly3DCollection(
+                np.zeros((1, 3, 3)), edgecolors="none", shade=False, zorder=1
+            )
+            self.ax.add_collection3d(self.solid)
+        self.axes_art = Line3DCollection(
+            np.zeros((1, 2, 3)), colors=["#000000"], linewidths=2.6, zorder=2
+        )
         self.ax.add_collection3d(self.axes_art)
         self.texts = {
-            label: self.ax.text(0.0, 0.0, 0.0, label, color="#101820", fontsize=11, zorder=10)
+            label: self.ax.text(0.0, 0.0, 0.0, label, color="#101820", fontsize=11, zorder=3)
             for label in FRAME_LABELS.values()
         }
 
-    def render(self, segments: np.ndarray, frames: dict[str, np.ndarray]) -> Image.Image:
-        self.skeleton.set_segments(list(segments))
+    def render(
+        self,
+        segments: np.ndarray,
+        frames: dict[str, np.ndarray],
+        q20: np.ndarray | None = None,
+        base: np.ndarray | None = None,
+    ) -> Image.Image:
+        if self.mesh is None:
+            self.skeleton.set_segments(list(segments))
+        else:
+            if q20 is None or base is None:
+                raise ValueError("mesh rendering needs the per-frame q20 and base transform")
+            triangles = self.mesh.triangles(q20, base)
+            self.solid.set_verts(triangles)
+            self.solid.set_facecolor(self.mesh.shade(triangles))
         axis_segments: list[np.ndarray] = []
         colors: list[str] = []
         for link, label in FRAME_LABELS.items():
@@ -302,6 +337,8 @@ def render_episode(args: argparse.Namespace) -> Path:
 
     world_segments: list[np.ndarray] = []
     world_frames: list[dict[str, np.ndarray]] = []
+    configurations: list[np.ndarray] = []
+    bases: list[np.ndarray] = []
     for joints25 in joints:
         q20 = kin.joints25_to_urdf20(joints25)
         world = kin.chassis_xyyaw_to_matrix(joints25[C.J_CHASSIS])
@@ -310,10 +347,14 @@ def render_episode(args: argparse.Namespace) -> Path:
         world_segments.append(local @ base[:3, :3].T + base[:3, 3])
         fk = model.fk(q20)
         world_frames.append({link: world @ fk[link] for link in FRAME_LABELS})
+        configurations.append(q20)
+        bases.append(base)
+
+    mesh = RobotMesh(args.urdf) if args.robot_style == "mesh" else None
 
     skeleton_size = (layout.skeleton[2], layout.skeleton[3])
     renderer = SkeletonRenderer(
-        model, world_segments, skeleton_size, args.elev, args.azim, args.axis_length, args.zoom
+        model, world_segments, skeleton_size, args.elev, args.azim, args.axis_length, args.zoom, mesh
     )
     title_font = ImageFont.truetype(str(FONT_DIR / "DejaVuSans-Bold.ttf"), 34)
     label_font = ImageFont.truetype(str(FONT_DIR / "DejaVuSans.ttf"), 15)
@@ -333,7 +374,10 @@ def render_episode(args: argparse.Namespace) -> Path:
             for label, box in layout.camera_panels():
                 _paste(canvas, _decode(images[label][frame], parquet_file), box)
                 _draw_label(draw, label, box, label_font)
-            _paste(canvas, renderer.render(world_segments[frame], world_frames[frame]), layout.skeleton)
+            panel = renderer.render(
+                world_segments[frame], world_frames[frame], configurations[frame], bases[frame]
+            )
+            _paste(canvas, panel, layout.skeleton)
             writer.append_data(np.asarray(canvas))
     finally:
         writer.close()
@@ -358,6 +402,12 @@ def _parse_args() -> argparse.Namespace:
         "--head-only",
         action="store_true",
         help="drop the left_wrist/right_wrist row: head camera left, skeleton right",
+    )
+    parser.add_argument(
+        "--robot-style",
+        choices=("skeleton", "mesh"),
+        default="skeleton",
+        help="3D panel: joint skeleton lines, or the solid low-poly robot body",
     )
     parser.add_argument("--elev", type=float, default=16.0)
     parser.add_argument("--azim", type=float, default=-72.0)

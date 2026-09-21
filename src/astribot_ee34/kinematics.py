@@ -7,6 +7,7 @@ import os
 import xml.etree.ElementTree as ET
 from collections.abc import Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -36,6 +37,27 @@ EXPECTED_JOINT_NAMES = (
 
 # q20 is torso4 + head2 + left7 + right7. IK excludes head.
 IK_Q20_INDICES = np.asarray([*range(4), *range(6, 13), *range(13, 20)], dtype=np.int64)
+
+
+def load_visual_urdf(urdf_path: Path = DEFAULT_URDF_PATH):
+    """Load the URDF with its visual meshes, for solid rendering.
+
+    :func:`AstribotKinematics` deliberately loads without meshes: FK and IK only
+    need the scene graph. Renderers that draw the robot body need the geometry,
+    which lives in a ``meshes/`` directory beside the URDF.
+    """
+    import yourdfpy
+
+    path = Path(urdf_path)
+    mesh_root = path.parent / "meshes"
+    if not mesh_root.is_dir():
+        raise KinematicsConfigError(f"URDF mesh root not found: {mesh_root}")
+    return yourdfpy.URDF.load(
+        path,
+        load_meshes=True,
+        build_scene_graph=True,
+        filename_handler=partial(yourdfpy.filename_handler_magic, dir=mesh_root),
+    )
 
 
 class KinematicsConfigError(ValueError):
