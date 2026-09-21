@@ -23,18 +23,23 @@ import numpy as np
 from . import kinematics as kin
 
 # Lambert light direction in world coordinates, and the ambient floor that keeps
-# faces pointing away from it readable rather than black.
+# faces pointing away from it readable rather than black. A white body needs a
+# wide shading range to read at all against the near-white panel, so the floor
+# sits lower than a mid-tone body would want.
 LIGHT_DIRECTION = np.asarray([0.4, -0.7, 0.6], dtype=np.float64)
-AMBIENT = 0.34
-DEFAULT_COLOR = "#B0A99F"
+AMBIENT = 0.16
+DEFAULT_COLOR = "#FFFFFF"
 
 # The parallel gripper is a four-bar per finger with no <mimic> in the URDF, so
 # its six joints are driven from one angle. The signs were read off the model:
 # L1/L2 lead, the distal L11 counter-rotates to keep the tip parallel, and the R
 # finger mirrors all three. THETA_CLOSED is where the fingers meet and
-# THETA_OPEN is the URDF zero pose; the recorded gripper stream is a 0-100
-# percentage with no documented angle calibration, so this mapping is a visual
-# approximation, not a kinematic claim.
+# THETA_OPEN is the URDF zero pose.
+#
+# The recorded 0-100 stream is *closure*, not opening: in the wrist camera the
+# fingers are spread at 0, clamped on the tomato at 31 and shut at 97. There is
+# no published angle calibration, so the two endpoints are a visual
+# approximation, not a kinematic claim -- but the direction is measured.
 GRIPPER_JOINT_SIGNS = {"L1": 1.0, "L2": 1.0, "L11": -1.0, "R1": -1.0, "R2": -1.0, "R11": 1.0}
 THETA_CLOSED = -1.0
 THETA_OPEN = 0.0
@@ -97,7 +102,8 @@ class GripperMesh:
 
     def posed(self, side: str, percent: float) -> list[tuple[LinkGeometry, np.ndarray]]:
         """Each gripper link's geometry and its pose relative to the arm mount."""
-        theta = THETA_CLOSED + (THETA_OPEN - THETA_CLOSED) * float(np.clip(percent, 0.0, 100.0)) / 100.0
+        closure = float(np.clip(percent, 0.0, 100.0)) / 100.0
+        theta = THETA_OPEN + (THETA_CLOSED - THETA_OPEN) * closure
         configuration = dict(self._zero)
         for finger, sign in GRIPPER_JOINT_SIGNS.items():
             configuration[self.joints[side][finger]] = sign * theta

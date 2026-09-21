@@ -101,13 +101,15 @@ def test_gripper_angle_maps_percent_to_the_closed_open_sweep() -> None:
     from astribot_ee34 import robot_mesh as rm
 
     def theta(percent: float) -> float:
-        return rm.THETA_CLOSED + (rm.THETA_OPEN - rm.THETA_CLOSED) * min(max(percent, 0.0), 100.0) / 100.0
+        closure = min(max(percent, 0.0), 100.0) / 100.0
+        return rm.THETA_OPEN + (rm.THETA_CLOSED - rm.THETA_OPEN) * closure
 
-    assert theta(0.0) == pytest.approx(rm.THETA_CLOSED)
-    assert theta(100.0) == pytest.approx(rm.THETA_OPEN)
+    # The stream is closure: 0 is open, 100 is shut.
+    assert theta(0.0) == pytest.approx(rm.THETA_OPEN)
+    assert theta(100.0) == pytest.approx(rm.THETA_CLOSED)
     # The recorded stream dips slightly below zero and is clamped, not wrapped.
-    assert theta(-0.03) == pytest.approx(rm.THETA_CLOSED)
-    assert theta(0.0) < theta(50.0) < theta(100.0)
+    assert theta(-0.03) == pytest.approx(rm.THETA_OPEN)
+    assert theta(0.0) > theta(50.0) > theta(100.0)
 
 
 def test_gripper_joint_signs_mirror_the_two_fingers() -> None:

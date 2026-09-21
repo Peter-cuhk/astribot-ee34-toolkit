@@ -221,10 +221,12 @@ never have to agree with the body model's. The fingers follow the recorded
 `poses_dict/astribot_gripper_{left,right}` stream, or the `command_poses_dict`
 one under `--stream action`.
 
-That stream is a 0-100 percentage with no published angle calibration, and the
-URDF carries no `<mimic>` tags, so the six finger joints are driven from one
-angle whose signs and closed/open endpoints were read off the geometry. Treat
-the opening as a visual approximation, not a measurement.
+That stream is *closure*, not opening: in the wrist camera the fingers are
+spread at 0, clamped on the object at 31 and shut at 97. There is no published
+angle calibration and the URDF carries no `<mimic>` tags, so the six finger
+joints are driven from one angle whose signs and endpoints were read off the
+geometry -- the direction is measured, the two endpoints are a visual
+approximation.
 
 `--head-only` drops the `left_wrist`/`right_wrist` row for a two-panel clip: the
 head camera on the left, the skeleton on the right. A 16:9 head panel wide
