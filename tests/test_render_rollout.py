@@ -52,32 +52,34 @@ def test_head_only_head_panel_is_taller_than_the_three_camera_one() -> None:
     assert build_layout(1920, 1080, 0.66, wrists=False).head[3] > build_layout(1920, 1080, 0.66).head[3]
 
 
-def test_hull_chunks_drop_negligible_shells() -> None:
+def test_hull_geometry_merges_every_shell_of_a_link() -> None:
     import trimesh
 
-    from astribot_ee34.robot_mesh import _hull_chunks
+    from astribot_ee34.robot_mesh import _hull_geometry
 
     big = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
-    bolt = trimesh.creation.box(extents=(0.01, 0.01, 0.01))
-    bolt.apply_translation((3.0, 0.0, 0.0))
-    link = trimesh.util.concatenate([big, bolt])
+    small = trimesh.creation.box(extents=(0.02, 0.02, 0.02))
+    small.apply_translation((3.0, 0.0, 0.0))
 
-    chunks = _hull_chunks(link, keep_ratio=0.12)
+    merged = _hull_geometry(trimesh.util.concatenate([big, small]))
 
-    assert len(chunks) == 1
-    assert chunks[0].vertices.shape[1] == 3
-    assert chunks[0].faces.shape[1] == 3
+    # Both shells survive -- the small ones are what fill the gaps between the
+    # big ones -- and their faces index into one shared vertex array.
+    assert merged.vertices.shape == (16, 3)
+    assert merged.faces.shape[1] == 3
+    assert merged.faces.max() == len(merged.vertices) - 1
+    assert merged.vertices[merged.faces].reshape(-1, 3)[:, 0].max() > 2.0
 
 
-def test_hull_chunks_keep_every_significant_shell() -> None:
-    import trimesh
+def test_parse_color_accepts_hex_with_or_without_hash() -> None:
+    from astribot_ee34.robot_mesh import _parse_color
 
-    from astribot_ee34.robot_mesh import _hull_chunks
+    assert _parse_color("#ff8000") == pytest.approx([1.0, 128 / 255, 0.0])
+    assert _parse_color("FF8000") == pytest.approx([1.0, 128 / 255, 0.0])
 
-    first = trimesh.creation.box(extents=(1.0, 1.0, 1.0))
-    second = trimesh.creation.box(extents=(0.8, 0.8, 0.8))
-    second.apply_translation((3.0, 0.0, 0.0))
 
-    chunks = _hull_chunks(trimesh.util.concatenate([first, second]), keep_ratio=0.12)
+def test_parse_color_rejects_a_bad_string() -> None:
+    from astribot_ee34.robot_mesh import _parse_color
 
-    assert len(chunks) == 2
+    with pytest.raises(ValueError, match="6-digit hex"):
+        _parse_color("blue")

@@ -21,6 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 from . import contract as C  # noqa: N812
 from . import kinematics as kin
 from . import render_video as rv
+from . import robot_mesh
 from .robot_mesh import RobotMesh
 
 CAMERAS = {"head": "head", "left_wrist": "left", "right_wrist": "right"}
@@ -91,7 +92,7 @@ def render_rollout(
         bases.append(base)
 
     if mesh_model is None and args.robot_style == "mesh":
-        mesh_model = RobotMesh(args.urdf)
+        mesh_model = RobotMesh(args.urdf, args.robot_color)
     renderer = rv.SkeletonRenderer(
         model, world_segments, (layout.skeleton[2], layout.skeleton[3]),
         args.elev, args.azim, args.axis_length, args.zoom, mesh_model,
@@ -147,6 +148,11 @@ def _parse_args() -> argparse.Namespace:
         default="skeleton",
         help="3D panel: joint skeleton lines, or the solid low-poly robot body",
     )
+    parser.add_argument(
+        "--robot-color",
+        default=robot_mesh.DEFAULT_COLOR,
+        help="body colour for --robot-style mesh, as #rrggbb",
+    )
     parser.add_argument("--elev", type=float, default=16.0)
     parser.add_argument("--azim", type=float, default=-72.0)
     parser.add_argument("--axis-length", type=float, default=0.16)
@@ -165,7 +171,7 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     # Hull extraction takes a few seconds, so batches share one mesh model.
-    mesh_model = RobotMesh(args.urdf) if args.robot_style == "mesh" else None
+    mesh_model = RobotMesh(args.urdf, args.robot_color) if args.robot_style == "mesh" else None
     for rollout in args.rollouts:
         hdf5_path = resolve_hdf5(rollout)
         output = args.output_dir / f"{hdf5_path.parent.name}.mp4"

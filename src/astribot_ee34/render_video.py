@@ -29,6 +29,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from . import contract as C  # noqa: N812
 from . import kinematics as kin
+from . import robot_mesh
 from .robot_mesh import RobotMesh
 
 IMAGE_COLUMNS = {
@@ -350,7 +351,7 @@ def render_episode(args: argparse.Namespace) -> Path:
         configurations.append(q20)
         bases.append(base)
 
-    mesh = RobotMesh(args.urdf) if args.robot_style == "mesh" else None
+    mesh = RobotMesh(args.urdf, args.robot_color) if args.robot_style == "mesh" else None
 
     skeleton_size = (layout.skeleton[2], layout.skeleton[3])
     renderer = SkeletonRenderer(
@@ -408,6 +409,11 @@ def _parse_args() -> argparse.Namespace:
         choices=("skeleton", "mesh"),
         default="skeleton",
         help="3D panel: joint skeleton lines, or the solid low-poly robot body",
+    )
+    parser.add_argument(
+        "--robot-color",
+        default=robot_mesh.DEFAULT_COLOR,
+        help="body colour for --robot-style mesh, as #rrggbb",
     )
     parser.add_argument("--elev", type=float, default=16.0)
     parser.add_argument("--azim", type=float, default=-72.0)

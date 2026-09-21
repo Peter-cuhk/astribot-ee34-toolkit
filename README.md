@@ -202,10 +202,11 @@ to.
 
 `--robot-style mesh` swaps the joint-skeleton lines for the solid robot body.
 The visual STLs are ~1.2M triangles, so each link is split into its connected
-shells, negligible ones (bolts, washers) are dropped, and the rest are replaced
-by their convex hulls -- ~79k triangles that keep the silhouette but give up
-concave interior detail. It costs roughly 0.35 s per frame against 0.02 s for
-the skeleton.
+shells and every shell is replaced by its convex hull -- ~122k triangles that
+keep each part's silhouette but give up concave interior detail. Shells are not
+filtered by size: dropping the small ones leaves visible holes between the big
+ones, which is what made the head look broken. It costs roughly 0.5 s per frame
+against 0.02 s for the skeleton. `--robot-color` takes an `#rrggbb` body colour.
 
 `--head-only` drops the `left_wrist`/`right_wrist` row for a two-panel clip: the
 head camera on the left, the skeleton on the right. A 16:9 head panel wide

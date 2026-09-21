@@ -1,12 +1,15 @@
 """Low-poly solid robot geometry for the offline renderers.
 
-The Astribot visual STLs are ~1.2M triangles across 24 links, which is far more
-than a 645x988 panel can show and far too slow to redraw 500 times. Each link is
-therefore split into its connected shells, the negligible ones (bolt heads,
-washers) are dropped, and every remaining shell is replaced by its convex hull.
-That keeps the silhouette a viewer actually reads -- torso column, shoulders,
-upper and lower arms, wrists, head -- at ~79k triangles, while deliberately
-giving up concave interior detail.
+The Astribot visual STLs are ~1.2M triangles across 24 links, more than a
+645x988 panel can show and too slow to redraw 500 times. Each link is split into
+its connected shells and every shell is replaced by its convex hull, which keeps
+each part's silhouette -- torso column, shoulders, arm segments, wrists, the head
+dome and its camera bar -- at ~122k triangles. Concave interior detail is
+deliberately given up; shells are *not* dropped by size, because the small ones
+are what fill the gaps between the big ones.
+
+The hulls of one link are merged into a single vertex/face array at build time so
+a frame costs one transform per link rather than one per shell.
 """
 
 from __future__ import annotations
@@ -18,19 +21,16 @@ import numpy as np
 
 from . import kinematics as kin
 
-# A shell is kept when its longest extent is at least this fraction of the
-# largest shell in the same link.
-DEFAULT_KEEP_RATIO = 0.12
-# Lambert light direction in world coordinates, and the ambient floor so faces
-# pointing away from it stay readable rather than going black.
+# Lambert light direction in world coordinates, and the ambient floor that keeps
+# faces pointing away from it readable rather than black.
 LIGHT_DIRECTION = np.asarray([0.4, -0.7, 0.6], dtype=np.float64)
-AMBIENT = 0.38
-BASE_COLOR = np.asarray([0.36, 0.55, 0.86], dtype=np.float64)
+AMBIENT = 0.34
+DEFAULT_COLOR = "#B0A99F"
 
 
 @dataclass(frozen=True)
-class Chunk:
-    """One convex shell of a link, in that link's frame."""
+class LinkGeometry:
+    """Every convex shell of one link, merged, in that link's frame."""
 
     vertices: np.ndarray
     faces: np.ndarray
@@ -39,27 +39,27 @@ class Chunk:
 class RobotMesh:
     """Per-link convex shells plus the per-frame world-space triangle build."""
 
-    def __init__(self, urdf_path: Path, keep_ratio: float = DEFAULT_KEEP_RATIO) -> None:
+    def __init__(self, urdf_path: Path, color: str = DEFAULT_COLOR) -> None:
         self.urdf = kin.load_visual_urdf(urdf_path)
-        self.parts: dict[str, list[Chunk]] = {}
+        self.links: dict[str, LinkGeometry] = {}
         for node in self.urdf.scene.graph.nodes_geometry:
-            geometry = self.urdf.scene.geometry[self.urdf.scene.graph[node][1]]
-            self.parts[node] = _hull_chunks(geometry, keep_ratio)
-        self.face_count = sum(len(chunk.faces) for chunks in self.parts.values() for chunk in chunks)
+            geometry = _hull_geometry(self.urdf.scene.geometry[self.urdf.scene.graph[node][1]])
+            if geometry is not None:
+                self.links[node] = geometry
+        self.face_count = sum(len(link.faces) for link in self.links.values())
         if self.face_count == 0:
             raise kin.KinematicsConfigError(f"no renderable visual geometry in {urdf_path}")
         self.light = LIGHT_DIRECTION / np.linalg.norm(LIGHT_DIRECTION)
+        self.color = _parse_color(color)
 
     def triangles(self, q20: np.ndarray, base: np.ndarray) -> np.ndarray:
         """World-space (n, 3, 3) triangles for one configuration."""
         self.urdf.update_cfg(np.asarray(q20, dtype=np.float64))
         batches: list[np.ndarray] = []
-        for node, chunks in self.parts.items():
+        for node, link in self.links.items():
             transform = base @ np.asarray(self.urdf.scene.graph.get(node)[0], dtype=np.float64)
-            rotation, translation = transform[:3, :3], transform[:3, 3]
-            for chunk in chunks:
-                world = chunk.vertices @ rotation.T + translation
-                batches.append(world[chunk.faces])
+            world = link.vertices @ transform[:3, :3].T + transform[:3, 3]
+            batches.append(world[link.faces])
         return np.concatenate(batches, axis=0)
 
     def shade(self, triangles: np.ndarray) -> np.ndarray:
@@ -67,24 +67,38 @@ class RobotMesh:
         normals = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
         normals /= np.linalg.norm(normals, axis=1, keepdims=True) + 1e-12
         lit = AMBIENT + (1.0 - AMBIENT) * np.abs(normals @ self.light)
-        return np.clip(lit[:, None] * BASE_COLOR[None, :], 0.0, 1.0)
+        return np.clip(lit[:, None] * self.color[None, :], 0.0, 1.0)
 
 
-def _hull_chunks(geometry, keep_ratio: float) -> list[Chunk]:
-    shells = list(geometry.split(only_watertight=False)) or [geometry]
-    extents = np.asarray([float(shell.extents.max()) for shell in shells])
-    chunks: list[Chunk] = []
-    for shell, extent in zip(shells, extents):
-        if extent < keep_ratio * extents.max() or len(shell.vertices) < 4:
+def _parse_color(value: str) -> np.ndarray:
+    text = value.strip().lstrip("#")
+    if len(text) != 6:
+        raise ValueError(f"robot color must be a 6-digit hex string, got {value!r}")
+    try:
+        channels = [int(text[index : index + 2], 16) / 255.0 for index in (0, 2, 4)]
+    except ValueError as error:
+        raise ValueError(f"robot color must be a 6-digit hex string, got {value!r}") from error
+    return np.asarray(channels, dtype=np.float64)
+
+
+def _hull_geometry(geometry) -> LinkGeometry | None:
+    vertex_blocks: list[np.ndarray] = []
+    face_blocks: list[np.ndarray] = []
+    offset = 0
+    for shell in list(geometry.split(only_watertight=False)) or [geometry]:
+        if len(shell.vertices) < 4:
             continue
         try:
             hull = shell.convex_hull
         except Exception:
             continue
-        chunks.append(
-            Chunk(
-                vertices=np.asarray(hull.vertices, dtype=np.float64),
-                faces=np.asarray(hull.faces, dtype=np.int64),
-            )
-        )
-    return chunks
+        vertices = np.asarray(hull.vertices, dtype=np.float64)
+        vertex_blocks.append(vertices)
+        face_blocks.append(np.asarray(hull.faces, dtype=np.int64) + offset)
+        offset += len(vertices)
+    if not vertex_blocks:
+        return None
+    return LinkGeometry(
+        vertices=np.concatenate(vertex_blocks, axis=0),
+        faces=np.concatenate(face_blocks, axis=0),
+    )
